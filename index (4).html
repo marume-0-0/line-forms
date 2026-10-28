@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://static.line-scdn.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.line.me https://*.line-scdn.net https://*.line-apps.com; frame-src https://*.line.me; form-action 'none'; base-uri 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<title>ご予約フォーム</title>
+<script>
+/* =========================================================
+   設定欄（医院ごとにここだけ書き換える）
+   テスト用（test/index.html）には開発用のLIFF ID、
+   本番用（index.html）には本番用のLIFF IDを入れる
+   ========================================================= */
+const CONFIG = {
+  LIFF_ID: 'ここにLIFF IDを入れる',
+  CLINIC_NAME: '〇〇歯科クリニック',
+
+  // 休診曜日（0=日 1=月 2=火 3=水 4=木 5=金 6=土）
+  CLOSED_WEEKDAYS: [0, 4],
+
+  // 休診日（祝日・年末年始・臨時休診など）'YYYY-MM-DD' で追加する
+  CLOSED_DATES: [
+    '2026-11-03', '2026-11-23',
+    '2026-12-29', '2026-12-30', '2026-12-31',
+    '2027-01-01', '2027-01-02', '2027-01-03', '2027-01-11'
+  ],
+
+  // 休診日の案内文（フォームに表示）
+  CLOSED_NOTE: '休診日：木曜・日曜・祝日',
+
+  // 選べる時間帯
+  TIME_SLOTS: ['午前', '午後', '夕方'],
+
+  // 何日後から何日後まで選べるか（1 = 明日から）
+  MIN_DAYS_AHEAD: 1,
+  MAX_DAYS_AHEAD: 60,
+
+  // ご希望の内容（key はカードのボタンから選択済みで開くときに使う）
+  KINDS: [
+    { key: 'checkup',  label: '検診・クリーニング' },
+    { key: 'ceramic',  label: 'セラミックの相談' },
+    { key: 'implant',  label: 'インプラントの相談' },
+    { key: 'pain',     label: '痛み・腫れ' },
+    { key: 'change',   label: '予約の変更・キャンセル' },
+    { key: 'other',    label: 'その他' }
+  ],
+
+  // 送信完了画面の文言
+  DONE_MESSAGE: 'ご希望を受け付けました。空き状況を確認のうえ、スタッフよりトークで確定のご連絡をいたします。確定のご連絡をもってご予約完了となります。',
+  FIRST_VISIT_NOTE: '初めての方は、当日受付で問診票をご記入いただきます。保険証またはマイナ保険証をお持ちください。'
+};
+</script>
+<style>
+:root{
+  --bg:#f6f7f6; --card:#ffffff; --text:#1f2421; --sub:#5b625d; --muted:#8a918c;
+  --line:#dfe3e0; --accent:#06c755; --accent-text:#ffffff; --sel-bg:#e8f8ee; --sel-text:#05813a;
+  --err:#c62828;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#151816; --card:#1e2220; --text:#e9ece9; --sub:#b4bab6; --muted:#8a918c;
+    --line:#333a36; --sel-bg:#173a25; --sel-text:#7fe0a5; --err:#ff7b72;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",Meiryo,sans-serif;
+  font-size:16px; line-height:1.6; -webkit-text-size-adjust:100%;
+}
+main{max-width:480px;margin:0 auto;padding:16px 16px calc(32px + env(safe-area-inset-bottom))}
+header{padding:4px 0 12px;border-bottom:1px solid var(--line);margin-bottom:8px}
+header .clinic{font-size:13px;color:var(--sub)}
+header h1{font-size:19px;font-weight:600;margin:2px 0 0}
+section{padding:14px 0;border-bottom:1px solid var(--line)}
+section:last-of-type{border-bottom:none}
+.label{display:block;font-size:14px;font-weight:600;margin-bottom:8px}
+.req{font-size:11px;color:var(--err);font-weight:400;margin-left:6px}
+.opt{font-size:11px;color:var(--muted);font-weight:400;margin-left:6px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{
+  appearance:none;border:1px solid var(--line);background:var(--card);color:var(--text);
+  border-radius:8px;padding:9px 12px;font-size:14px;font-family:inherit;cursor:pointer;
+}
+.chip[aria-pressed="true"]{background:var(--sel-bg);border-color:var(--accent);color:var(--sel-text);font-weight:600}
+input[type="text"],input[type="date"],select,textarea{
+  width:100%;font-size:16px;font-family:inherit;color:var(--text);background:var(--card);
+  border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+}
+textarea{resize:vertical;min-height:72px}
+.hope{display:grid;grid-template-columns:3.2em minmax(0,1.4fr) minmax(0,1fr);gap:8px;align-items:center;margin-bottom:8px}
+.hope span{font-size:13px;color:var(--sub)}
+.note{font-size:12px;color:var(--muted);margin-top:6px}
+.err{font-size:13px;color:var(--err);margin-top:6px;min-height:0}
+.err:empty{display:none}
+.btn{
+  display:block;width:100%;border:none;border-radius:10px;padding:14px;font-size:16px;font-weight:600;
+  font-family:inherit;background:var(--accent);color:var(--accent-text);cursor:pointer;margin-top:18px;
+}
+.btn[disabled]{opacity:.6;cursor:default}
+.btn.sub{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:400;margin-top:10px}
+.hidden{display:none !important}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 16px;margin-top:12px}
+.panel h2{font-size:17px;margin:0 0 8px;font-weight:600}
+.panel p{margin:0 0 10px;font-size:14px}
+pre.msg{
+  white-space:pre-wrap;word-break:break-all;font-family:inherit;font-size:14px;
+  background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;margin:10px 0 0;
+}
+#loading{text-align:center;color:var(--sub);padding:48px 0;font-size:14px}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="clinic" id="clinicName"></div>
+    <h1>ご予約・ご相談</h1>
+  </header>
+
+  <div id="loading">読み込み中です…</div>
+
+  <!-- LINEの外で開かれたとき -->
+  <div id="outside" class="panel hidden">
+    <h2>LINEアプリから開いてください</h2>
+    <p>このフォームは、医院のLINE公式アカウントのトーク画面下にあるメニュー「予約・変更」から開いてご利用ください。</p>
+  </div>
+
+  <!-- 初期化に失敗したとき -->
+  <div id="initError" class="panel hidden">
+    <h2>フォームを開けませんでした</h2>
+    <p>お手数ですが、トーク画面に戻ってもう一度メニューから開いてください。解決しない場合は、トークでご希望の日時をお送りください。</p>
+  </div>
+
+  <!-- 入力フォーム -->
+  <form id="form" class="hidden" novalidate>
+    <section>
+      <span class="label">当院の受診は<span class="req">必須</span></span>
+      <div class="chips" id="visit" role="group" aria-label="受診歴">
+        <button type="button" class="chip" data-value="first" aria-pressed="false">初めて（初診）</button>
+        <button type="button" class="chip" data-value="return" aria-pressed="false">通院したことがある</button>
+      </div>
+      <div class="err" id="errVisit"></div>
+    </section>
+
+    <section id="nameSec" class="hidden">
+      <label class="label" for="name">お名前<span class="req">必須</span></label>
+      <input type="text" id="name" maxlength="40" autocomplete="name" placeholder="山田 花子">
+      <div class="err" id="errName"></div>
+    </section>
+
+    <section>
+      <span class="label">ご希望の内容<span class="req">必須</span></span>
+      <div class="chips" id="kind" role="group" aria-label="ご希望の内容"></div>
+      <textarea id="otherText" class="hidden" maxlength="200" placeholder="ご用件をご記入ください" style="margin-top:8px"></textarea>
+      <div class="err" id="errKind"></div>
+    </section>
+
+    <section>
+      <span class="label">ご希望の日時<span class="opt">第1希望は必須</span></span>
+      <div id="hopes"></div>
+      <div class="note" id="closedNote"></div>
+      <div class="err" id="errHope"></div>
+    </section>
+
+    <section>
+      <label class="label" for="memo">備考<span class="opt">任意</span></label>
+      <textarea id="memo" maxlength="200" placeholder="例：子どもと一緒に受診したい"></textarea>
+      <div class="note">症状の詳しい内容や保険証の番号は、来院時に伺います。ここには書かないでください。</div>
+    </section>
+
+    <button type="submit" class="btn" id="submitBtn">この内容で送信</button>
+    <div class="note">送信すると、入力内容がトークに送られます。ご予約はスタッフからの確定のご連絡で完了します。</div>
+  </form>
+
+  <!-- 送信完了 -->
+  <div id="done" class="panel hidden">
+    <h2>送信しました</h2>
+    <p id="doneMessage"></p>
+    <p id="doneFirst" class="hidden"></p>
+    <button type="button" class="btn" id="closeBtn">トークに戻る</button>
+  </div>
+
+  <!-- トークに送れなかったとき（コピーして貼り付けてもらう） -->
+  <div id="fallback" class="panel hidden">
+    <h2>トークへ自動で送れませんでした</h2>
+    <p>お手数ですが、下の内容をコピーして、トークに貼り付けて送信してください。</p>
+    <pre class="msg" id="fallbackText"></pre>
+    <button type="button" class="btn" id="copyBtn">内容をコピーする</button>
+    <div class="note" id="copyResult"></div>
+    <button type="button" class="btn sub" id="closeBtn2">トークに戻る</button>
+  </div>
+</main>
+
+<script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var WEEK = ['日', '月', '火', '水', '木', '金', '土'];
+  var state = { visit: '', kind: '' };
+
+  /* ---------- 日付ユーティリティ（端末の現地時間で計算） ---------- */
+  function ymd(d) {
+    var m = String(d.getMonth() + 1).padStart(2, '0');
+    var day = String(d.getDate()).padStart(2, '0');
+    return d.getFullYear() + '-' + m + '-' + day;
+  }
+  function parseYmd(s) {
+    var p = s.split('-');
+    return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  }
+  function addDays(base, n) {
+    var d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+    d.setDate(d.getDate() + n);
+    return d;
+  }
+  function fmt(s) {
+    var d = parseYmd(s);
+    return (d.getMonth() + 1) + '/' + d.getDate() + '(' + WEEK[d.getDay()] + ')';
+  }
+  function isClosed(s) {
+    var d = parseYmd(s);
+    return CONFIG.CLOSED_WEEKDAYS.indexOf(d.getDay()) !== -1 || CONFIG.CLOSED_DATES.indexOf(s) !== -1;
+  }
+
+  /* ---------- 画面の組み立て ---------- */
+  function show(id) {
+    ['loading', 'outside', 'initError', 'form', 'done', 'fallback'].forEach(function (x) {
+      $(x).classList.toggle('hidden', x !== id);
+    });
+    window.scrollTo(0, 0);
+  }
+
+  function buildForm() {
+    $('clinicName').textContent = CONFIG.CLINIC_NAME;
+    $('closedNote').textContent = CONFIG.CLOSED_NOTE;
+
+    var kindBox = $('kind');
+    CONFIG.KINDS.forEach(function (k) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'chip';
+      b.dataset.value = k.key;
+      b.setAttribute('aria-pressed', 'false');
+      b.textContent = k.label;
+      kindBox.appendChild(b);
+    });
+
+    var today = new Date();
+    var min = ymd(addDays(today, CONFIG.MIN_DAYS_AHEAD));
+    var max = ymd(addDays(today, CONFIG.MAX_DAYS_AHEAD));
+    var html = '';
+    for (var i = 1; i <= 3; i++) {
+      html += '<div class="hope"><span>第' + i + '希望</span>' +
+        '<input type="date" id="d' + i + '" min="' + min + '" max="' + max + '" aria-label="第' + i + '希望の日付">' +
+        '<select id="s' + i + '" aria-label="第' + i + '希望の時間帯"><option value="">時間帯</option>' +
+        CONFIG.TIME_SLOTS.map(function (t) { return '<option>' + t + '</option>'; }).join('') +
+        '</select></div>';
+    }
+    $('hopes').innerHTML = html;
+
+    setupChips('visit', function (v) {
+      state.visit = v;
+      $('nameSec').classList.toggle('hidden', v !== 'first');
+      $('errVisit').textContent = '';
+    });
+    setupChips('kind', function (v) {
+      state.kind = v;
+      $('otherText').classList.toggle('hidden', v !== 'other');
+      $('errKind').textContent = '';
+    });
+
+    $('name').addEventListener('input', function () { $('errName').textContent = ''; });
+    $('otherText').addEventListener('input', function () { $('errKind').textContent = ''; });
+    for (var j = 1; j <= 3; j++) {
+      $('d' + j).addEventListener('change', function () { $('errHope').textContent = ''; });
+      $('s' + j).addEventListener('change', function () { $('errHope').textContent = ''; });
+    }
+
+    $('form').addEventListener('submit', onSubmit);
+    $('closeBtn').addEventListener('click', closeWindow);
+    $('closeBtn2').addEventListener('click', closeWindow);
+    $('copyBtn').addEventListener('click', copyText);
+  }
+
+  function setupChips(groupId, onSelect) {
+    var group = $(groupId);
+    group.addEventListener('click', function (e) {
+      var b = e.target.closest('.chip');
+      if (!b) return;
+      selectChip(groupId, b.dataset.value);
+      onSelect(b.dataset.value);
+    });
+  }
+  function selectChip(groupId, value) {
+    Array.prototype.forEach.call($(groupId).querySelectorAll('.chip'), function (c) {
+      c.setAttribute('aria-pressed', c.dataset.value === value ? 'true' : 'false');
+    });
+  }
+
+  /* カードのボタンから ?kind=ceramic などで開かれたら、内容を選択済みにする */
+  function applyQuery() {
+    var params = new URLSearchParams(window.location.search);
+    var k = params.get('kind');
+    if (!k) return;
+    var found = CONFIG.KINDS.some(function (x) { return x.key === k; });
+    if (!found) return;
+    selectChip('kind', k);
+    state.kind = k;
+    $('otherText').classList.toggle('hidden', k !== 'other');
+  }
+
+  /* ---------- 入力チェック ---------- */
+  function validate() {
+    var ok = true;
+    ['errVisit', 'errName', 'errKind', 'errHope'].forEach(function (x) { $(x).textContent = ''; });
+
+    if (!state.visit) { $('errVisit').textContent = '初診か通院歴ありかを選んでください'; ok = false; }
+    if (state.visit === 'first' && !$('name').value.trim()) { $('errName').textContent = 'お名前を入力してください'; ok = false; }
+    if (!state.kind) { $('errKind').textContent = 'ご希望の内容を選んでください'; ok = false; }
+    else if (state.kind === 'other' && !$('otherText').value.trim()) { $('errKind').textContent = 'ご用件を入力してください'; ok = false; }
+
+    var hopes = [];
+    var seen = {};
+    var minS = $('d1').min, maxS = $('d1').max;
+    for (var i = 1; i <= 3; i++) {
+      var d = $('d' + i).value, s = $('s' + i).value;
+      if (!d && !s) continue;
+      if (!d || !s) { $('errHope').textContent = '第' + i + '希望の日付と時間帯を両方選んでください'; ok = false; break; }
+      if (d < minS || d > maxS) { $('errHope').textContent = '第' + i + '希望は' + fmt(minS) + '〜' + fmt(maxS) + 'の間で選んでください'; ok = false; break; }
+      if (isClosed(d)) { $('errHope').textContent = '第' + i + '希望の' + fmt(d) + 'は休診日です。別の日を選んでください'; ok = false; break; }
+      if (seen[d + s]) { $('errHope').textContent = '同じ日時が重複しています'; ok = false; break; }
+      seen[d + s] = true;
+      hopes.push('第' + i + '希望：' + fmt(d) + ' ' + s);
+    }
+    if (ok && !$('d1').value) { $('errHope').textContent = '第1希望の日時を選んでください'; ok = false; }
+
+    if (!ok) {
+      var firstErr = document.querySelector('.err:not(:empty)');
+      if (firstErr) firstErr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    return ok ? hopes : null;
+  }
+
+  function buildMessage(hopes) {
+    var kindLabel = CONFIG.KINDS.filter(function (x) { return x.key === state.kind; })[0].label;
+    if (state.kind === 'other') kindLabel += '（' + $('otherText').value.trim() + '）';
+    var lines = ['【ご予約希望】'];
+    if (state.visit === 'first') {
+      lines.push('初診');
+      lines.push('お名前：' + $('name').value.trim());
+    } else {
+      lines.push('再診');
+    }
+    lines.push('内容：' + kindLabel);
+    lines = lines.concat(hopes);
+    var memo = $('memo').value.trim();
+    if (memo) lines.push('備考：' + memo);
+    return lines.join('\n');
+  }
+
+  /* ---------- 送信 ---------- */
+  var lastMessage = '';
+  var sending = false;
+
+  function onSubmit(e) {
+    e.preventDefault();
+    if (sending) return;
+    var hopes = validate();
+    if (!hopes) return;
+
+    lastMessage = buildMessage(hopes);
+    sending = true;
+    $('submitBtn').disabled = true;
+    $('submitBtn').textContent = '送信しています…';
+
+    canSendToChat()
+      .then(function (can) {
+        if (!can) throw new Error('not-in-chat');
+        return liff.sendMessages([{ type: 'text', text: lastMessage }]);
+      })
+      .then(function () {
+        $('doneMessage').textContent = CONFIG.DONE_MESSAGE;
+        $('doneFirst').textContent = CONFIG.FIRST_VISIT_NOTE;
+        $('doneFirst').classList.toggle('hidden', state.visit !== 'first');
+        show('done');
+      })
+      .catch(function (err) {
+        if (window.console) console.warn('sendMessages failed:', err);
+        $('fallbackText').textContent = lastMessage;
+        show('fallback');
+      })
+      .then(function () {
+        sending = false;
+        $('submitBtn').disabled = false;
+        $('submitBtn').textContent = 'この内容で送信';
+      });
+  }
+
+  /* トーク画面から開かれていて、送信の権限があるかを確認する */
+  function canSendToChat() {
+    try {
+      var ctx = liff.getContext();
+      if (!ctx || ['utou', 'group', 'room', 'square_chat'].indexOf(ctx.type) === -1) {
+        return Promise.resolve(false);
+      }
+    } catch (e) {
+      return Promise.resolve(false);
+    }
+    if (!liff.permission || !liff.permission.query) return Promise.resolve(true);
+    return liff.permission.query('chat_message.write')
+      .then(function (p) {
+        if (p.state === 'granted') return true;
+        if (p.state === 'prompt' && liff.permission.requestAll) {
+          return liff.permission.requestAll().then(function () {
+            return liff.permission.query('chat_message.write');
+          }).then(function (p2) { return p2.state === 'granted'; });
+        }
+        return false;
+      })
+      .catch(function () { return true; });
+  }
+
+  function closeWindow() {
+    try { liff.closeWindow(); } catch (e) { window.close(); }
+  }
+
+  function copyText() {
+    var text = lastMessage;
+    var done = function () { $('copyResult').textContent = 'コピーしました。トークに貼り付けて送信してください。'; };
+    var fail = function () { $('copyResult').textContent = 'コピーできませんでした。上の内容を長押しして選択し、コピーしてください。'; };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fail);
+    } else {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'absolute';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        ok ? done() : fail();
+      } catch (e) { fail(); }
+    }
+  }
+
+  /* ---------- 起動 ---------- */
+  buildForm();
+
+  if (typeof liff === 'undefined') {
+    show('initError');
+    return;
+  }
+
+  liff.init({ liffId: CONFIG.LIFF_ID })
+    .then(function () {
+      if (!liff.isInClient()) {
+        show('outside');
+        return;
+      }
+      applyQuery();
+      show('form');
+    })
+    .catch(function (err) {
+      if (window.console) console.error('liff.init failed:', err);
+      show('initError');
+    });
+})();
+</script>
+</body>
+</html>
